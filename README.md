@@ -82,7 +82,7 @@ pip install -r requirements.txt
 #### 4.Configure Credentials:
 
 ```bash
-cp secrets.toml.example .streamlit/secrets.
+cp secrets.toml.example .streamlit/secrets.toml
 ```
 
 #### 5.Usage 
