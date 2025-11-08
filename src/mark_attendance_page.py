@@ -36,10 +36,6 @@ def mark_attendance(session_state):
     
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(frame, session_state.recognized_name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-
-        
         result_image = Image.fromarray(frame)
         st.image(result_image, caption=f"Recognition Result: {session_state.recognized_name if session_state.recognized_name else 'No face detected'}")
         
