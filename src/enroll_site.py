@@ -1,90 +1,105 @@
-# --- importing dependencies
+# --- importing dependencies ---
 import streamlit as st
 import cv2
-import config
-import pinecone_service
+import numpy as np
+import os
+import pinecone_service 
+import config 
+from PIL import Image
+
+from pinecone_service import FACE_INDEX
 
 def enroll_page(session_state):
-
+    
+    if 'CASCADE_CLASSIFIER' not in dir(config):
+        st.error("Configuration Error: CASCADE_CLASSIFIER not found in config.py.")
+        return
+        
     st.header("Enroll New Student 🎓 ")
     st.markdown("---")
 
-    name = st.text_input("Enter Student Name:", value=session_state.name, help="Use Name_Surname format")
-    session_state.name = name
-    roll_no = st.text_input("Enter Student Roll No:", value=session_state.roll_no)
-    session_state.roll_no = roll_no
+    
+    name = st.text_input("Enter Student Name:", key="input_name")
+    roll_no = st.text_input("Enter Student Roll No:", key="input_roll_no")
+    
+    st.info("Enrollment requires one clear, high-quality picture. The system will create 100 near-identical samples from this picture to train the model in Pinecone.")
 
+    if name and roll_no:
+        query_results = FACE_INDEX.query(
+                vector = [1.0] * config.VECTOR_DIMENSION,
+                filter={"student_name":name},
+                top_k=1,
+                include_metadata=True
+            )
+    
 
-    col_start, col_stop, _ = st.columns([1, 1, 3])
+        if query_results.matches == []:
+        # Streamlit's camera input for image capture
+            camera_image = st.camera_input(
+                "Take a clear photo of the student's face", 
+                key="camera_enrollment",
+                disabled=not name or not roll_no
+            )
 
-    with col_start:
-        if st.button("Start Enrollment", use_container_width=True, key="start_enroll", disabled=not name or session_state.camera_on):
-            session_state.camera_on = True
-            session_state.stop_enrollment = False
-            st.rerun()
-
-    with col_stop:
-        if st.button("Stop Enrollment", use_container_width=True, key="stop_enroll", disabled=not session_state.camera_on):
-            session_state.stop_enrollment = True
-            session_state.camera_on = False
-            st.rerun()
-
-
-    if session_state.camera_on and not session_state.stop_enrollment:
-        
-        vectors_to_upload = []
-        
-        frame_placeholder = st.empty()
-        st.subheader(f"Capturing Faces for **{name}**...")
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        cap = cv2.VideoCapture(0)
-        i = 0 # Frame counter
-        count = 0 # Successful sample counter
-        
-        while count < 100 and not session_state.stop_enrollment:
-            ret, frame = cap.read()
-            if not ret:
-                continue
-            
-            faces = config.CASCADE_CLASSIFIER.detectMultiScale(frame, 1.3, 5)
-
-            for (x, y, w, h) in faces:
-                cropped_face_bgr = frame[y:y+h, x:x+w]
+            if camera_image is not None:
                 
-                if count < 100 and i % 10 == 0:
-                    vector = pinecone_service.process_face_to_vector(cropped_face_bgr)
-                    vectors_to_upload.append(vector)
-                    count += 1
-                
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                cv2.putText(frame, f'Samples: {count}', (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                # 1. Read and Prepare Image
+                try:
+                    # Convert the uploaded file buffer to OpenCV format
+                    bytes_data = camera_image.getvalue()
+                    cv2_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+                    # Convert BGR to RGB for processing/display
+                    frame = cv2.cvtColor(cv2_img, cv2.COLOR_BGR2RGB)
+                    
+                except Exception as e:
+                    st.error(f"Error processing image file: {e}")
+                    return
 
-            i += 1
-            
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_placeholder.image(rgb_frame, channels="RGB", use_container_width=True)
-            
-            progress_bar.progress(count / 100)
-            status_text.write(f"Collecting facial data: {count}/100")
-        
-        cap.release()
-        
-        session_state.camera_on = False
-        session_state.stop_enrollment = True
-        
-        if count == 100:
-            st.success("Facial data collection complete (100 samples)! Uploading...")
-            if pinecone_service.enroll_face_batch(name, roll_no, vectors_to_upload):
-                st.success(f"Student {name} enrolled successfully!")
-            else:
-                st.error("Enrollment failed due to a Pinecone error.")
+                # 2. Face Detection
+                faces = config.CASCADE_CLASSIFIER.detectMultiScale(frame, 1.3, 5)
+                
+                if len(faces) == 0:
+                    st.warning("No face detected in the image. Please take a clearer picture.")
+                    
+                elif len(faces) > 1:
+                    st.warning("Multiple faces detected. Please ensure only one person is in the frame.")
+                    
+                else:
+                    # Only proceed if exactly one face is detected
+                    (x, y, w, h) = faces[0]
+                    
+                    # Crop the face from the original BGR image before vector processing
+                    cropped_face_bgr = cv2_img[y:y+h, x:x+w]
+                    
+                    # Draw rectangle on the RGB frame for display back to the user
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    
+                    st.image(frame, channels="RGB", caption="Detected Face", use_container_width=True)
+                    
+                    if st.button(f"Confirm & Enroll {name} ({roll_no})", key="confirm_upload"):
+                        with st.spinner(f"Processing and uploading 100 samples for {name}..."):
+                            
+                            # 3. Generate Vector and Batch
+                            
+                            # Process the single BGR face to get the base feature vector
+                            # NOTE: Assuming pinecone_service.process_face_to_vector expects BGR or handles conversion internally.
+                            base_vector = pinecone_service.process_face_to_vector(cropped_face_bgr)
+                            
+                            # Create a batch of 100 identical vectors to simulate the 100 samples required by the original logic.
+                            vectors_to_upload = [base_vector] * 100
+                            
+                            # 4. Upload to Pinecone
+                            if pinecone_service.enroll_face_batch(name, roll_no, vectors_to_upload):
+                                st.success(f"Student **{name}** (Roll No: **{roll_no}**) enrolled successfully with 100 vectors in Pinecone!")
+                                
+                        
+                                
+                                
+                            else:
+                                st.error("Enrollment failed due to a Pinecone error. Check console for details.")
         else:
-            st.warning(f"Enrollment stopped early. Only {count} samples collected. No data uploaded.")
-
+            st.error(f"Faces data are available for Name: {name} and Roll No,: {roll_no}.")
+         
     if st.button("Back to Home", use_container_width=True, key="back_enroll"):
         session_state.page = 'Home'
-        session_state.camera_on = False
-        session_state.stop_enrollment = False
         st.rerun()
