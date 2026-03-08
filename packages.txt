@@ -2,7 +2,8 @@ libgl1
 libsm6
 libxrender1
 libxext6
-libglib2.0-0
+libglib2.0-0t64
+
 
 
 
