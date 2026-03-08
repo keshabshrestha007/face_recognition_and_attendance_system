@@ -1,5 +1,7 @@
-libgl1-mesa-glx
+ffmpeg
 libglib2.0-0
 libgl1
 libgtk-3-0
+
+
 
